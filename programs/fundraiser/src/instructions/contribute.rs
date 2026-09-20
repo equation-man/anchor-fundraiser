@@ -6,6 +6,9 @@ use anchor_spl::token::{
     TokenAccount, 
     Transfer
 };
+use anchor_spl::{
+    associated_token::AssociatedToken,
+};
 
 use crate::{
     state::{
@@ -49,6 +52,35 @@ pub struct Contribute<'info> {
         associated_token::authority = fundraiser
     )]
     pub vault: Account<'info, TokenAccount>,
+    // NFT RECIPT ACCOUNTS
+    // New NFT mint account.
+    #[account(
+        init,
+        payer = contributor,
+        mint::decimals = 0,
+        mint::authority = fundraiser,
+        mint::freeze_authority = fundraiser,
+    )]
+    pub receipt_mint: Account<'info, Mint>,
+    // The contributor's Associated Token Account.
+    #[account(
+        init_if_needed,
+        payer = contributor,
+        associated_token::mint = receipt_mint,
+        associated_token::authority = contributor,
+    )]
+    pub receipt_ata: Account<'info, TokenAccount>,
+    /// CHECK: Metaplex metadata account. PDA derived using metaplex seeds
+    /// Will be validated in the program with metaplex CPI.
+    #[account(mut)]
+    pub metadata_account: UncheckedAccount<'info>,
+    /// CHECK: Metaplex Master Edition Account. PDA derived using metaplex seeds
+    #[account(mut)]
+    pub master_edition: UncheckedAccount<'info>,
+    /// CHECK: Metaplex Token Metadata Program ID.
+    pub token_metadata_program: UncheckedAccount<'info>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -100,6 +132,8 @@ impl<'info> Contribute<'info> {
 
         // Transfer the funds from the contributor to the vault
         transfer(cpi_ctx, amount)?;
+
+        // Give an NFT receipt to the contributor to show he has contributed.
 
         // Update the fundraiser and contributor accounts with the new amounts
         self.fundraiser.current_amount += amount;
