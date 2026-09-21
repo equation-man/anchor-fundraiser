@@ -10,7 +10,10 @@ use anchor_spl::token::{
 };
 use anchor_spl::{
     associated_token::AssociatedToken,
-    metadata::Metadata,
+    metadata::{
+        mpl_token_metadata::instructions::BurnV1CpiBuilder,
+        Metadata, 
+    },
 };
 
 use crate::{
@@ -20,6 +23,11 @@ use crate::{
     }, 
     SECONDS_TO_DAYS
 };
+
+
+/// Address of the Instructions sysvar, which Metaplex's BurnV1 requires.
+const INSTRUCTIONS_SYSVAR_ID: Pubkey = pubkey!("Sysvar1nstructions1111111111111111111111111");
+
 
 #[derive(Accounts)]
 pub struct Refund<'info> {
@@ -94,10 +102,13 @@ pub struct Refund<'info> {
         seeds::program = token_metadata_program.key(),
     )]
     pub master_edition: UncheckedAccount<'info>,
-    /// CHECK: Metaplex Token Metadata Program ID.
     pub token_metadata_program: Program<'info, Metadata>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
 
+    /// CHECK: the Instructions sysvar, which Burnv1 requires. Pinned by address.
+    #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+    pub sysvar_instructions: UncheckedAccount<'info>,
+
+    pub associated_token_program: Program<'info, AssociatedToken>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -118,18 +129,32 @@ impl<'info> Refund<'info> {
             self.vault.amount < self.fundraiser.amount_to_raise,
             crate::FundraiserError::TargetMet
         );
-        // Burning the receipt first. No receipt, no refund.
-        burn(
-            CpiContext::new(
-                self.token_program.key(),
-                Burn {
-                    mint: self.receipt_mint.to_account_info(),
-                    from: self.receipt_ata.to_account_info(),
-                    authority: self.contributor.to_account_info(),
-                },
-            ),
-            1,
-        )?;
+        // Burning the receipt first through Metaplex. No receipt, no refund.
+        // This burns the token and closes
+        // the token account, metadata and master edition, returning their rent
+        // to the contributor. The contributor already signed the transaction,
+        // so this is a plain `invoke`, with no PDA seeds. It runs before the
+        let metadata_program = self.token_metadata_program.to_account_info();
+        let contributor = self.contributor.to_account_info();
+        let metadata = self.metadata_account.to_account_info();
+        let edition = self.master_edition.to_account_info();
+        let mint = self.receipt_mint.to_account_info();
+        let token = self.receipt_ata.to_account_info();
+        let system_program = self.system_program.to_account_info();
+        let sysvar_instructions = self.sysvar_instructions.to_account_info();
+        let token_program = self.token_program.to_account_info();
+
+        BurnV1CpiBuilder::new(&metadata_program)
+            .authority(&contributor)
+            .metadata(&metadata)
+            .edition(Some(&edition))
+            .mint(&mint)
+            .token(&token)
+            .system_program(&system_program)
+            .sysvar_instructions(&sysvar_instructions)
+            .spl_token_program(&token_program)
+            .amount(1)
+            .invoke()?;
 
         // Transfer the funds back to the contributor
         // CPI to the token program to transfer the funds
@@ -142,6 +167,7 @@ impl<'info> Refund<'info> {
             to: self.contributor_ata.to_account_info(),
             authority: self.fundraiser.to_account_info(),
         };
+
 
         // Signer seeds to sign the CPI on behalf of the fundraiser account
         let signer_seeds: [&[&[u8]]; 1] = [&[
