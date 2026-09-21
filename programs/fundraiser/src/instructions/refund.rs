@@ -21,6 +21,7 @@ use crate::{
         Contributor, 
         Fundraiser
     }, 
+    FundraiserError,
     SECONDS_TO_DAYS
 };
 
@@ -117,7 +118,6 @@ impl<'info> Refund<'info> {
     pub fn refund(&mut self) -> Result<()> {
 
         // Check if the fundraising duration has been reached
-        let current_time = Clock::get()?.unix_timestamp;
         let elapsed = Clock::get()?.unix_timestamp
             .checked_sub(self.fundraiser.time_started)
             .ok_or(FundraiserError::MathOverflow)?;
@@ -182,15 +182,14 @@ impl<'info> Refund<'info> {
         // CPI context with signer since the fundraiser account is a PDA
         let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, &signer_seeds);
 
-        let transfer_amount = self.contributor_account.amount;
+        let refund_amount = self.contributor_account.amount;
 
         // Transfer the funds from the vault to the contributor
-        transfer(cpi_ctx, transfer_amount)?;
+        transfer(cpi_ctx, refund_amount)?;
 
         // Burn the NFT issued
 
         // Update the fundraiser state by reducing the amount contributed
-        self.fundraiser.current_amount -= self.contributor_account.amount;
         self.fundraiser.current_amount = self.fundraiser.current_amount.checked_sub(refund_amount)
             .ok_or(FundraiserError::MathOverflow)?;
 
