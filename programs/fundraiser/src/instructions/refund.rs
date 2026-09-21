@@ -4,10 +4,13 @@ use anchor_spl::token::{
     Mint, 
     Token, 
     TokenAccount, 
-    Transfer
+    Transfer,
+    burn,
+    Burn,
 };
 use anchor_spl::{
     associated_token::AssociatedToken,
+    metadata::Metadata,
 };
 
 use crate::{
@@ -73,17 +76,26 @@ pub struct Refund<'info> {
             b"metadata",
             token_metadata_program.key().as_ref(),
             receipt_mint.key().as_ref(),
-            b"edition",
         ],
         bump,
         seeds::program = token_metadata_program.key()
     )]
     pub metadata_account: UncheckedAccount<'info>,
     /// CHECK: Metaplex Master Edition Account. PDA derived using metaplex seeds
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [
+            b"metadata",
+            token_metadata_program.key().as_ref(),
+            receipt_mint.key().as_ref(),
+            b"edition",
+        ],
+        bump,
+        seeds::program = token_metadata_program.key(),
+    )]
     pub master_edition: UncheckedAccount<'info>,
     /// CHECK: Metaplex Token Metadata Program ID.
-    pub token_metadata_program: UncheckedAccount<'info>,
+    pub token_metadata_program: Program<'info, Metadata>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 
     pub token_program: Program<'info, Token>,
@@ -106,6 +118,18 @@ impl<'info> Refund<'info> {
             self.vault.amount < self.fundraiser.amount_to_raise,
             crate::FundraiserError::TargetMet
         );
+        // Burning the receipt first. No receipt, no refund.
+        burn(
+            CpiContext::new(
+                self.token_program.key(),
+                Burn {
+                    mint: self.receipt_mint.to_account_info(),
+                    from: self.receipt_ata.to_account_info(),
+                    authority: self.contributor.to_account_info(),
+                },
+            ),
+            1,
+        )?;
 
         // Transfer the funds back to the contributor
         // CPI to the token program to transfer the funds
