@@ -54,8 +54,8 @@ pub struct Refund<'info> {
     #[account(
         mut,
         mint::decimals = 0,
-        mint::authority = fundraiser,
-        mint::freeze_authority = fundraiser,
+        mint::authority = master_edition,
+        mint::freeze_authority = master_edition,
     )]
     pub receipt_mint: Account<'info, Mint>,
     // The contributor's Associated Token Account.
@@ -67,7 +67,17 @@ pub struct Refund<'info> {
     pub receipt_ata: Account<'info, TokenAccount>,
     /// CHECK: Metaplex metadata account. PDA derived using metaplex seeds
     /// Will be validated in the program with metaplex CPI.
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [
+            b"metadata",
+            token_metadata_program.key().as_ref(),
+            receipt_mint.key().as_ref(),
+            b"edition",
+        ],
+        bump,
+        seeds::program = token_metadata_program.key()
+    )]
     pub metadata_account: UncheckedAccount<'info>,
     /// CHECK: Metaplex Master Edition Account. PDA derived using metaplex seeds
     #[account(mut)]
@@ -122,8 +132,11 @@ impl<'info> Refund<'info> {
         // Transfer the funds from the vault to the contributor
         transfer(cpi_ctx, self.contributor_account.amount)?;
 
+        // Burn the NFT issued
+
         // Update the fundraiser state by reducing the amount contributed
         self.fundraiser.current_amount -= self.contributor_account.amount;
+
 
         Ok(())
     }

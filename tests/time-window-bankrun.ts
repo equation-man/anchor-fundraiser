@@ -84,7 +84,7 @@ describe("fundraiser — the window closes (bankrun)", () => {
   }
 
   before(async () => {
-    context = await startAnchor("", [], []);
+    context = await startAnchor("", [{name: "mpl_token_metadata", programId: TOKEN_METADATA_PROGRAM_ID}], []);
     provider = new BankrunProvider(context);
     anchor.setProvider(provider);
 

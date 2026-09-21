@@ -4,10 +4,19 @@ use anchor_spl::token::{
     transfer, 
     Token, 
     TokenAccount, 
-    Transfer
+    Transfer,
+    mint_to,
+    MintTo,
 };
 use anchor_spl::{
     associated_token::AssociatedToken,
+    metadata::{
+        mpl_token_metadata::{
+            instructions::{CreateMasterEditionV3CpiBuilder, CreateMetadataAccountV3CpiBuilder},
+            types::DataV2,
+        },
+        Metadata,
+    },
 };
 
 use crate::{
@@ -78,7 +87,7 @@ pub struct Contribute<'info> {
     #[account(mut)]
     pub master_edition: UncheckedAccount<'info>,
     /// CHECK: Metaplex Token Metadata Program ID.
-    pub token_metadata_program: UncheckedAccount<'info>,
+    pub token_metadata_program: Program<'info, Metadata>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 
     pub token_program: Program<'info, Token>,
@@ -133,12 +142,75 @@ impl<'info> Contribute<'info> {
         // Transfer the funds from the contributor to the vault
         transfer(cpi_ctx, amount)?;
 
-        // Give an NFT receipt to the contributor to show he has contributed.
+        // Give an NFT receipt to the contributor to show he/she has contributed.
+        let maker = self.fundraiser.maker;
+        let bump = [self.fundraiser.bump];
+        let signer_seeds: &[&[&[u8]]] = &[&[b"fundraiser", maker.as_ref(), &bump]];
+        msg!("About to do NFT minting");
+
+        // Mint exactly one token to the contributor. The fundraiser PDA is the
+        // mint authority (set in the accounts struct), so it signs.
+        mint_to(
+            CpiContext::new_with_signer(
+                self.token_program.key(),
+                MintTo {
+                    mint: self.receipt_mint.to_account_info(),
+                    to: self.receipt_ata.to_account_info(),
+                    authority: self.fundraiser.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            1,
+        )?;
+
+        // The builders borrow AccountInfos, so bind them first.
+        let metadata_program = self.token_metadata_program.to_account_info();
+        let metadata = self.metadata_account.to_account_info();
+        let edition = self.master_edition.to_account_info();
+        let mint = self.receipt_mint.to_account_info();
+        let authority = self.fundraiser.to_account_info();
+        let payer = self.contributor.to_account_info();
+        let system_program = self.system_program.to_account_info();
+        let token_program = self.token_program.to_account_info();
+
+        // Metadata: name, symbol, uri. No `.rent(...)` call, so no rent account.
+        CreateMetadataAccountV3CpiBuilder::new(&metadata_program)
+            .metadata(&metadata)
+            .mint(&mint)
+            .mint_authority(&authority)
+            .payer(&payer)
+            .update_authority(&authority, true)
+            .system_program(&system_program)
+            .data(DataV2 {
+                name: "Fundraiser Receipt".to_string(),               // max 32 bytes
+                symbol: "RCPT".to_string(),                           // max 10 bytes
+                uri: "https://example.com/receipt.json".to_string(),  // max 200 bytes
+                seller_fee_basis_points: 0,
+                creators: None,
+                collection: None,
+                uses: None,
+            })
+            .is_mutable(false)
+            .invoke_signed(signer_seeds)?;
+
+        // Master edition: this is what makes the mint an NFT.
+        CreateMasterEditionV3CpiBuilder::new(&metadata_program)
+            .edition(&edition)
+            .mint(&mint)
+            .update_authority(&authority)
+            .mint_authority(&authority)
+            .payer(&payer)
+            .metadata(&metadata)
+            .token_program(&token_program)
+            .system_program(&system_program)
+            .max_supply(0)
+            .invoke_signed(signer_seeds)?;
 
         // Update the fundraiser and contributor accounts with the new amounts
         self.fundraiser.current_amount += amount;
 
         self.contributor_account.amount += amount;
+
 
         Ok(())
     }
